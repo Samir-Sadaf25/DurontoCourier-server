@@ -35,7 +35,15 @@ async function run() {
     );
 
     const parcelsCollection = client.db("DurontoCourier").collection("parcels");
-    
+    app.post("/parcels", async (req, res) => {
+      const parcel = req.body;
+      const result = await parcelsCollection.insertOne(parcel);
+      res.send(result);
+    });
+    app.get("/parcels",async(req,res) =>{
+       const parcel = await parcelsCollection.find().toArray();
+       res.send(parcel);
+    })
   } finally {
     // Ensures that the client will close when you finish/error
   }
