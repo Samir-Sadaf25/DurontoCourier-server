@@ -55,6 +55,45 @@ async function run() {
         console.error(err);
         res.status(500).json({ message: "Failed to fetch parcels" });
       }
+
+      app.delete("/parcels/:id", async (req, res) => {
+        try {
+          const id = req.params.id;
+          const result = await parcelsCollection.deleteOne({
+            _id: new ObjectId(id),
+          });
+
+          if (result.deletedCount === 0) {
+            return res.status(404).json({ message: "Parcel not found" });
+          }
+          res.status(200).json({ message: "Parcel cancelled" });
+        } catch (err) {
+          console.error(err);
+          res.status(500).json({ message: "Failed to delete parcel" });
+        }
+      });
+
+      // PATCH /parcels/:id  — update payment or delivery status
+      app.patch("/parcels/:id", async (req, res) => {
+        try {
+          const id = req.params.id;
+          const updates = req.body; // e.g. { paymentStatus: "paid" } or { deliveryStatus: "shipped" }
+
+          const result = await parcelsCollection.findOneAndUpdate(
+            { _id: new ObjectId(id) },
+            { $set: updates },
+            { returnDocument: "after" }
+          );
+
+          if (!result.value) {
+            return res.status(404).json({ message: "Parcel not found" });
+          }
+          res.status(200).json(result.value);
+        } catch (err) {
+          console.error(err);
+          res.status(500).json({ message: "Failed to update parcel" });
+        }
+      });
     });
   } finally {
     // Ensures that the client will close when you finish/error
