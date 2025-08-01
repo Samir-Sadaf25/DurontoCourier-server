@@ -36,14 +36,26 @@ async function run() {
 
     const parcelsCollection = client.db("DurontoCourier").collection("parcels");
     app.post("/parcels", async (req, res) => {
-      const parcel = req.body;
-      const result = await parcelsCollection.insertOne(parcel);
-      res.send(result);
+      try {
+        const parcel = req.body;
+        const result = await parcelsCollection.insertOne(parcel);
+        res.status(201).json({ insertedId: result.insertedId });
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Failed to create parcel" });
+      }
     });
-    app.get("/parcels",async(req,res) =>{
-       const parcel = await parcelsCollection.find().toArray();
-       res.send(parcel);
-    })
+    app.get("/parcels", async (req, res) => {
+      try {
+        const email = req.query.user_email;
+        const filter = email ? { "sender.user_email": email } : {};
+        const parcels = await parcelsCollection.find(filter).toArray();
+        res.status(200).json(parcels);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Failed to fetch parcels" });
+      }
+    });
   } finally {
     // Ensures that the client will close when you finish/error
   }
