@@ -1,39 +1,45 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const StripeLib = require("stripe");           // renamed import
-const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-
 const app = express();
 const port = process.env.PORT || 3000;
-const stripe = StripeLib(process.env.STRIPE_SECRET_KEY);
-
+const StripeLib = require("stripe"); // renamed import
 app.use(cors());
 app.use(express.json());
+const stripe = StripeLib(process.env.STRIPE_SECRET_KEY);
+
+
 
 // 1) Health check
 app.get("/", (req, res) => {
   res.send("server is running");
 });
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.vvycnhh.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
+});
 async function run() {
   try {
     // 2) Connect to MongoDB
-    const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}` +
-                `@cluster0.vvycnhh.mongodb.net/?retryWrites=true&w=majority`;
-    const client = new MongoClient(uri, {
-      serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
-    });
-
+    
     await client.connect();
-    console.log("Connected to MongoDB");
+    await client.db("admin").command({ ping: 1 });
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!"
+    );
 
-    const parcels = client.db("DurontoCourier").collection("parcels");
-
+    const parcelsCollection = client.db("DurontoCourier").collection("parcels");
+    const paymentsCollection = client.db("DurontoCourier").collection("payments");
     // 3) Parcel CRUD
     app.post("/parcels", async (req, res) => {
       try {
-        const result = await parcels.insertOne(req.body);
+        const result = await parcelsCollection.insertOne(req.body);
         res.status(201).json({ insertedId: result.insertedId });
       } catch (err) {
         console.error(err);
@@ -46,7 +52,7 @@ async function run() {
         const filter = req.query.user_email
           ? { "sender.user_email": req.query.user_email }
           : {};
-        const data = await parcels.find(filter).toArray();
+        const data = await parcelsCollection.find(filter).toArray();
         res.json(data);
       } catch (err) {
         console.error(err);
@@ -60,7 +66,7 @@ async function run() {
         if (!ObjectId.isValid(id)) {
           return res.status(400).json({ message: "Invalid parcel ID" });
         }
-        const parcel = await parcels.findOne({ _id: new ObjectId(id) });
+        const parcel = await parcelsCollection.findOne({ _id: new ObjectId(id) });
         if (!parcel) {
           return res.status(404).json({ message: "Parcel not found" });
         }
@@ -74,7 +80,9 @@ async function run() {
     app.delete("/parcels/:id", async (req, res) => {
       try {
         const id = req.params.id;
-        const { deletedCount } = await parcels.deleteOne({ _id: new ObjectId(id) });
+        const { deletedCount } = await parcelsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
         if (deletedCount === 0) {
           return res.status(404).json({ message: "Parcel not found" });
         }
@@ -101,7 +109,82 @@ async function run() {
         res.status(500).json({ error: err.message });
       }
     });
+    // POST /payments — save payment and mark parcel as paid
+    app.post("/payments", async (req, res) => {
+      try {
+        const {
+          parcelId, // string (Mongo ObjectId)
+          amount, // number (in smallest unit used on server-side; keep consistent)
+          currency = "usd", // string
+          user_email, // who paid
+          paymentIntentId, // Stripe PaymentIntent id (pi_*)
+          paymentMethod = "card",
+          status = "succeeded",
+        } = req.body;
 
+        // Validate parcelId
+        if (!ObjectId.isValid(parcelId)) {
+          return res.status(400).json({ message: "Invalid parcelId" });
+        }
+
+        // Insert a payment record
+        const paymentDoc = {
+          parcelId: new ObjectId(parcelId),
+          amount,
+          currency,
+          user_email,
+          paymentIntentId,
+          paymentMethod,
+          status,
+          createdAt: new Date(),
+        };
+        const insertResult = await paymentsCollection.insertOne(paymentDoc);
+
+        // Update the parcel’s paymentStatus to 'paid'
+        const updateResult = await parcelsCollection.updateOne(
+          { _id: new ObjectId(parcelId) },
+          {
+            $set: {
+              paymentStatus: "paid",
+              paidAt: new Date(),
+              paymentIntentId,
+            },
+          }
+        );
+
+        if (updateResult.matchedCount === 0) {
+          return res.status(404).json({ message: "Parcel not found" });
+        }
+
+        return res.status(201).json({
+          paymentId: insertResult.insertedId,
+          updatedParcel: updateResult.modifiedCount === 1,
+        });
+      } catch (err) {
+        // Handle duplicate paymentIntentId gracefully
+        if (err.code === 11000) {
+          return res.status(409).json({ message: "Payment already recorded" });
+        }
+        console.error("POST /payments error", err);
+        return res.status(500).json({ message: "Failed to save payment" });
+      }
+    });
+
+    // GET /payments?user_email=... — list a user's payments
+    app.get("/payments", async (req, res) => {
+      try {
+        const { user_email } = req.query;
+        const filter = user_email ? { user_email } : {};
+        const payments = await paymentsCollection
+          .find(filter)
+          .sort({ createdAt: -1 })
+          .toArray();
+        return res.json(payments);
+      } catch (err) {
+        console.error("GET /payments error", err);
+        return res.status(500).json({ message: "Failed to fetch payments" });
+      }
+    });
     // 5) Start listening *after* routes are in place
     app.listen(port, () => {
       console.log(`Server listening on http://localhost:${port}`);
