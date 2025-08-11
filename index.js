@@ -8,8 +8,6 @@ app.use(cors());
 app.use(express.json());
 const stripe = StripeLib(process.env.STRIPE_SECRET_KEY);
 
-
-
 // 1) Health check
 app.get("/", (req, res) => {
   res.send("server is running");
@@ -27,7 +25,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // 2) Connect to MongoDB
-    
+
     await client.connect();
     await client.db("admin").command({ ping: 1 });
     console.log(
@@ -35,7 +33,11 @@ async function run() {
     );
 
     const parcelsCollection = client.db("DurontoCourier").collection("parcels");
-    const paymentsCollection = client.db("DurontoCourier").collection("payments");
+    const paymentsCollection = client
+      .db("DurontoCourier")
+      .collection("payments");
+    const userCollection = client.db("DurontoCourier").collection("users");
+
     // 3) Parcel CRUD
     app.post("/parcels", async (req, res) => {
       try {
@@ -66,7 +68,9 @@ async function run() {
         if (!ObjectId.isValid(id)) {
           return res.status(400).json({ message: "Invalid parcel ID" });
         }
-        const parcel = await parcelsCollection.findOne({ _id: new ObjectId(id) });
+        const parcel = await parcelsCollection.findOne({
+          _id: new ObjectId(id),
+        });
         if (!parcel) {
           return res.status(404).json({ message: "Parcel not found" });
         }
@@ -183,6 +187,35 @@ async function run() {
       } catch (err) {
         console.error("GET /payments error", err);
         return res.status(500).json({ message: "Failed to fetch payments" });
+      }
+    });
+    app.post("/users", async (req, res) => {
+      try {
+        const {
+          name,
+          email,
+          createdAt = new Date(),
+          role = "user", // optional: default role
+        } = req.body;
+
+        // Check if user already exists
+        const existing = await userCollection.findOne({ email });
+        if (existing) {
+          return res.status(409).json({ message: "User already exists" });
+        }
+
+        const newUser = {
+          name,
+          email,
+          createdAt,
+          role,
+        };
+
+        const result = await userCollection.insertOne(newUser);
+        res.status(201).json({ insertedId: result.insertedId });
+      } catch (err) {
+        console.error("POST /users error", err);
+        res.status(500).json({ message: "Failed to register user" });
       }
     });
     // 5) Start listening *after* routes are in place
