@@ -4,10 +4,16 @@ const cors = require("cors");
 const app = express();
 const port = process.env.PORT || 3000;
 const StripeLib = require("stripe"); // renamed import
+const admin = require("firebase-admin");
 app.use(cors());
 app.use(express.json());
 const stripe = StripeLib(process.env.STRIPE_SECRET_KEY);
 
+var serviceAccount = require("./duronto-courier-admin-key.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 // 1) Health check
 app.get("/", (req, res) => {
   res.send("server is running");
@@ -36,7 +42,32 @@ async function run() {
     const paymentsCollection = client
       .db("DurontoCourier")
       .collection("payments");
+    const riders = client.db("DurontoCourier").collection("riders");
     const userCollection = client.db("DurontoCourier").collection("users");
+
+    const verifyFirebaseToken = async (req, res, next) => {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).json({ message: "Unauthorized: No token" });
+      }
+
+      // Bearer <token>
+      const token = authHeader.split(" ")[1];
+      try {
+        const decoded = await admin.auth().verifyIdToken(token);
+        req.decoded = decoded;
+        next();
+      } catch (error) {
+        return res.status(403).json({ message: "Forbidden: Invalid token" });
+      }
+      // jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+      //   if (err) {
+      //     return res.status(403).json({ message: "Forbidden: Invalid token" });
+      //   }
+      //   req.decoded = decoded; // { email, iat, exp }
+      //   next();
+      // });
+    };
 
     // 3) Parcel CRUD
     app.post("/parcels", async (req, res) => {
@@ -49,7 +80,7 @@ async function run() {
       }
     });
 
-    app.get("/parcels", async (req, res) => {
+    app.get("/parcels", verifyFirebaseToken, async (req, res) => {
       try {
         const filter = req.query.user_email
           ? { "sender.user_email": req.query.user_email }
@@ -96,7 +127,8 @@ async function run() {
         res.status(500).json({ message: "Failed to delete parcel" });
       }
     });
-
+     // riders
+   
     // 4) Stripe payment‐intent route
     app.post("/create-payment-intent", async (req, res) => {
       try {
@@ -175,9 +207,13 @@ async function run() {
     });
 
     // GET /payments?user_email=... — list a user's payments
-    app.get("/payments", async (req, res) => {
+    app.get("/payments", verifyFirebaseToken, async (req, res) => {
       try {
         const { user_email } = req.query;
+        console.log("decoded", req.decoded);
+        if (req.decoded.email !== user_email) {
+          return res.status(403).send({ message: "forbidden access" });
+        }
         const filter = user_email ? { user_email } : {};
         const payments = await paymentsCollection
           .find(filter)
