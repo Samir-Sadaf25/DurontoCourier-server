@@ -127,8 +127,82 @@ async function run() {
         res.status(500).json({ message: "Failed to delete parcel" });
       }
     });
-     // riders
-   
+    // riders
+    app.post("/riders", async (req, res) => {
+      try {
+        const newRider = req.body;
+        // optional: server-side validation here
+        newRider.status = "pending";
+        const result = await riders.insertOne(newRider);
+        // result = { acknowledged: true, insertedId: ObjectId("…") }
+        res.status(201).json(result);
+      } catch (insertErr) {
+        console.error("Insert error:", insertErr);
+        res.status(500).json({
+          acknowledged: false,
+          message: "Failed to register rider",
+        });
+      }
+    });
+    app.get("/riders", verifyFirebaseToken, async (req, res) => {
+      try {
+        const filter = {};
+        if (req.query.status) {
+          filter.status = req.query.status;
+        }
+        const list = await riders.find(filter).toArray();
+        res.json(list);
+      } catch (err) {
+        console.error("GET /riders error:", err);
+        res.status(500).json({ message: "Failed to fetch riders" });
+      }
+    });
+
+    //
+    // 3) Approve rider → PATCH status to “active”
+    //
+    app.patch("/riders/:id", verifyFirebaseToken, async (req, res) => {
+      try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ message: "Invalid rider ID" });
+        }
+        const update = { $set: { status: req.body.status || "active" } };
+        const result = await riders.updateOne(
+          { _id: new ObjectId(id) },
+          update
+        );
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Rider not found" });
+        }
+        res.json({ modifiedCount: result.modifiedCount });
+      } catch (err) {
+        console.error("PATCH /riders/:id error:", err);
+        res.status(500).json({ message: "Failed to update rider status" });
+      }
+    });
+
+    //
+    // 4) Reject rider → DELETE document
+    //
+    app.delete("/riders/:id", verifyFirebaseToken, async (req, res) => {
+      try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ message: "Invalid rider ID" });
+        }
+        const { deletedCount } = await riders.deleteOne({
+          _id: new ObjectId(id),
+        });
+        if (deletedCount === 0) {
+          return res.status(404).json({ message: "Rider not found" });
+        }
+        res.json({ message: "Rider rejected and removed" });
+      } catch (err) {
+        console.error("DELETE /riders/:id error:", err);
+        res.status(500).json({ message: "Failed to reject rider" });
+      }
+    });
     // 4) Stripe payment‐intent route
     app.post("/create-payment-intent", async (req, res) => {
       try {
