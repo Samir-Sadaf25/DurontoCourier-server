@@ -161,26 +161,45 @@ async function run() {
     //
     // 3) Approve rider → PATCH status to “active”
     //
-    app.patch("/riders/:id", verifyFirebaseToken, async (req, res) => {
-      try {
-        const { id } = req.params;
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).json({ message: "Invalid rider ID" });
-        }
-        const update = { $set: { status: req.body.status || "active" } };
-        const result = await riders.updateOne(
-          { _id: new ObjectId(id) },
-          update
-        );
-        if (result.matchedCount === 0) {
-          return res.status(404).json({ message: "Rider not found" });
-        }
-        res.json({ modifiedCount: result.modifiedCount });
-      } catch (err) {
-        console.error("PATCH /riders/:id error:", err);
-        res.status(500).json({ message: "Failed to update rider status" });
-      }
-    });
+    
+app.patch("/riders/:id", verifyFirebaseToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid rider ID" });
+    }
+
+    // 1) Fetch the rider document so we know their email
+    const riderDoc = await riders.findOne({ _id: new ObjectId(id) });
+    if (!riderDoc) {
+      return res.status(404).json({ message: "Rider not found" });
+    }
+
+    // 2) Update rider status
+    const newStatus = req.body.status || "active";
+    const updateResult = await riders.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: newStatus } }
+    );
+    if (updateResult.matchedCount === 0) {
+      return res.status(404).json({ message: "Failed to update status" });
+    }
+
+    // 3) If approved, promote the user’s role
+    if (newStatus === "active") {
+      const email = riderDoc.email;
+      await userCollection.updateOne(
+        { email },
+        { $set: { role: "rider" } }
+      );
+    }
+
+    return res.json({ modifiedCount: updateResult.modifiedCount });
+  } catch (err) {
+    console.error("PATCH /riders/:id error:", err);
+    res.status(500).json({ message: "Failed to update rider" });
+  }
+});
 
     //
     // 4) Reject rider → DELETE document
