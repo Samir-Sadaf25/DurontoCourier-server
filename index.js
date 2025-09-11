@@ -161,49 +161,47 @@ async function run() {
     //
     // 3) Approve rider → PATCH status to “active”
     //
-    
-app.patch("/riders/:id", verifyFirebaseToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid rider ID" });
-    }
 
-    // 1) Fetch the rider document so we know their email
-    const riderDoc = await riders.findOne({ _id: new ObjectId(id) });
-    if (!riderDoc) {
-      return res.status(404).json({ message: "Rider not found" });
-    }
+    app.patch("/riders/:id", verifyFirebaseToken, async (req, res) => {
+      try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ message: "Invalid rider ID" });
+        }
 
-    // 2) Update rider status
-    const newStatus = req.body.status || "active";
-    const updateResult = await riders.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { status: newStatus } }
-    );
-    if (updateResult.matchedCount === 0) {
-      return res.status(404).json({ message: "Failed to update status" });
-    }
+        // 1) Fetch the rider document so we know their email
+        const riderDoc = await riders.findOne({ _id: new ObjectId(id) });
+        if (!riderDoc) {
+          return res.status(404).json({ message: "Rider not found" });
+        }
 
-    // 3) If approved, promote the user’s role
-    if (newStatus === "active") {
-      const email = riderDoc.email;
-      await userCollection.updateOne(
-        { email },
-        { $set: { role: "rider" } }
-      );
-    }
+        // 2) Update rider status
+        const newStatus = req.body.status || "active";
+        const updateResult = await riders.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: newStatus } }
+        );
+        if (updateResult.matchedCount === 0) {
+          return res.status(404).json({ message: "Failed to update status" });
+        }
 
-    return res.json({ modifiedCount: updateResult.modifiedCount });
-  } catch (err) {
-    console.error("PATCH /riders/:id error:", err);
-    res.status(500).json({ message: "Failed to update rider" });
-  }
-});
+        // 3) If approved, promote the user’s role
+        if (newStatus === "active") {
+          const email = riderDoc.email;
+          await userCollection.updateOne(
+            { email },
+            { $set: { role: "rider" } }
+          );
+        }
 
-    //
+        return res.json({ modifiedCount: updateResult.modifiedCount });
+      } catch (err) {
+        console.error("PATCH /riders/:id error:", err);
+        res.status(500).json({ message: "Failed to update rider" });
+      }
+    });
+
     // 4) Reject rider → DELETE document
-    //
     app.delete("/riders/:id", verifyFirebaseToken, async (req, res) => {
       try {
         const { id } = req.params;
@@ -318,6 +316,26 @@ app.patch("/riders/:id", verifyFirebaseToken, async (req, res) => {
         return res.status(500).json({ message: "Failed to fetch payments" });
       }
     });
+    // users
+    app.get("/users", async (req, res) => {
+      try {
+        const email = req.query.email;
+        if (!email) {
+          return res.status(400).json({ message: "Email query required" });
+        }
+
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        // send back the single object (not an array)
+        res.json(user);
+      } catch (err) {
+        console.error("GET /users error:", err);
+        res.status(500).json({ message: "Server error fetching user" });
+      }
+    });
     app.post("/users", async (req, res) => {
       try {
         const {
@@ -347,6 +365,39 @@ app.patch("/riders/:id", verifyFirebaseToken, async (req, res) => {
         res.status(500).json({ message: "Failed to register user" });
       }
     });
+
+    function checkRole(requiredRole) {
+      return async (req, res, next) => {
+        try {
+          const email = req.decodedToken.email;
+          const user = await userCollection.findOne({ email });
+
+          if (!user || user.role !== requiredRole) {
+            return res.status(403).json({ message: "Forbidden" });
+          }
+          next();
+        } catch (err) {
+          console.error("checkRole error:", err);
+          res.status(500).json({ message: "Internal Server Error" });
+        }
+      };
+    }
+
+    // 2. admin state
+    app.get(
+      "/admin/stats",
+      verifyFirebaseToken,
+      checkRole("admin"),
+      async (req, res) => {
+        // now there’s no stray token and checkRole returns a function
+        const totalUsers = await userCollection.countDocuments();
+        const pendingRiders = await riders.countDocuments({
+          status: "pending",
+        });
+        res.json({ totalUsers, pendingRiders });
+      }
+    );
+
     // 5) Start listening *after* routes are in place
     app.listen(port, () => {
       console.log(`Server listening on http://localhost:${port}`);
