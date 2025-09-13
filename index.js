@@ -46,27 +46,18 @@ async function run() {
     const userCollection = client.db("DurontoCourier").collection("users");
 
     const verifyFirebaseToken = async (req, res, next) => {
-      const authHeader = req.headers.authorization;
-      if (!authHeader) {
+      const authHeader = req.headers.authorization || "";
+      const token = authHeader.split(" ")[1];
+      if (!token) {
         return res.status(401).json({ message: "Unauthorized: No token" });
       }
-
-      // Bearer <token>
-      const token = authHeader.split(" ")[1];
       try {
         const decoded = await admin.auth().verifyIdToken(token);
-        req.decoded = decoded;
+        req.decodedToken = decoded; // ← use decodedToken
         next();
-      } catch (error) {
+      } catch (err) {
         return res.status(403).json({ message: "Forbidden: Invalid token" });
       }
-      // jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
-      //   if (err) {
-      //     return res.status(403).json({ message: "Forbidden: Invalid token" });
-      //   }
-      //   req.decoded = decoded; // { email, iat, exp }
-      //   next();
-      // });
     };
 
     // 3) Parcel CRUD
@@ -130,33 +121,29 @@ async function run() {
     // riders
     app.post("/riders", async (req, res) => {
       try {
-        const newRider = req.body;
-        // optional: server-side validation here
-        newRider.status = "pending";
+        const newRider = {
+          ...req.body,
+          status: "pending",
+          createdAt: new Date(), // ← add this
+        };
         const result = await riders.insertOne(newRider);
-        // result = { acknowledged: true, insertedId: ObjectId("…") }
-        res.status(201).json(result);
-      } catch (insertErr) {
-        console.error("Insert error:", insertErr);
-        res.status(500).json({
-          acknowledged: false,
-          message: "Failed to register rider",
-        });
+        res.status(201).json({ insertedId: result.insertedId });
+      } catch (err) {
+        console.error("Insert error:", err);
+        res.status(500).json({ message: "Failed to register rider" });
       }
     });
-    app.get("/riders", verifyFirebaseToken, async (req, res) => {
-      try {
-        const filter = {};
-        if (req.query.status) {
-          filter.status = req.query.status;
-        }
+    app.get(
+      "/riders",
+      verifyFirebaseToken,
+      checkRole("admin"),
+      async (req, res) => {
+        const { status } = req.query;
+        const filter = status ? { status } : {};
         const list = await riders.find(filter).toArray();
         res.json(list);
-      } catch (err) {
-        console.error("GET /riders error:", err);
-        res.status(500).json({ message: "Failed to fetch riders" });
       }
-    });
+    );
 
     //
     // 3) Approve rider → PATCH status to “active”
@@ -369,9 +356,8 @@ async function run() {
     function checkRole(requiredRole) {
       return async (req, res, next) => {
         try {
-          const email = req.decodedToken.email;
+          const email = req.decodedToken.email; // now defined
           const user = await userCollection.findOne({ email });
-
           if (!user || user.role !== requiredRole) {
             return res.status(403).json({ message: "Forbidden" });
           }
@@ -382,7 +368,6 @@ async function run() {
         }
       };
     }
-
     // 2. admin state
     app.get(
       "/admin/stats",
