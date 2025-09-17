@@ -1,4 +1,4 @@
-require("dotenv").config();
+const dotenv = require("dotenv");
 const express = require("express");
 const cors = require("cors");
 const app = express();
@@ -7,9 +7,9 @@ const StripeLib = require("stripe"); // renamed import
 const admin = require("firebase-admin");
 app.use(cors());
 app.use(express.json());
-const stripe = StripeLib(process.env.STRIPE_SECRET_KEY);
-
-var serviceAccount = require("./duronto-courier-admin-key.json");
+dotenv.config();
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const serviceAccount = require("./duronto-courier-admin-key.json");
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -46,17 +46,23 @@ async function run() {
     const userCollection = client.db("DurontoCourier").collection("users");
 
     const verifyFirebaseToken = async (req, res, next) => {
-      const authHeader = req.headers.authorization || "";
-      const token = authHeader.split(" ")[1];
-      if (!token) {
-        return res.status(401).json({ message: "Unauthorized: No token" });
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).send({ message: "unauthorized access" });
       }
+      const token = authHeader.split(" ")[1];
+      
+      if (!token) {
+        return res.status(401).send({ message: "unauthorized access" });
+      }
+
+      // verify the token
       try {
         const decoded = await admin.auth().verifyIdToken(token);
-        req.decodedToken = decoded; // ← use decodedToken
+        req.decodedToken = decoded;
         next();
-      } catch (err) {
-        return res.status(403).json({ message: "Forbidden: Invalid token" });
+      } catch (error) {
+        return res.status(403).send({ message: "forbidden access" });
       }
     };
 
@@ -207,6 +213,27 @@ async function run() {
         res.status(500).json({ message: "Failed to reject rider" });
       }
     });
+
+    app.get(
+      "/admin/stats",
+      verifyFirebaseToken,
+      checkRole("admin"),
+      async (req, res) => {
+        try {
+          // Fetch only active riders
+          const activeRidersList = await riders
+            .find({ status: "active" })
+            .project({ _id: 1, name: 1 })
+            .toArray();
+
+          return res.json({ activeRidersList });
+        } catch (err) {
+          console.error("/admin/stats error:", err);
+          res.status(500).json({ message: "Failed to fetch admin stats" });
+        }
+      }
+    );
+
     // 4) Stripe payment‐intent route
     app.post("/create-payment-intent", async (req, res) => {
       try {
@@ -302,6 +329,64 @@ async function run() {
         console.error("GET /payments error", err);
         return res.status(500).json({ message: "Failed to fetch payments" });
       }
+    });
+
+    app.get(
+      "/parcels",
+      verifyFirebaseToken,
+      checkRole("admin"),
+      async (req, res) => {
+        // status=paid & unassigned
+        const filter = {
+          status: "paid",
+          assignedTo: { $exists: false },
+        };
+        const parcels = await parcelsCollection.find(filter).toArray();
+        res.json(parcels);
+      }
+    );
+
+    app.get(
+      "/admin/parcels/unassigned",
+      verifyFirebaseToken,
+      checkRole("admin"),
+      async (req, res) => {
+        try {
+          const filter = {
+            paymentStatus: "paid",
+            assignedTo: { $exists: false },
+          };
+          const parcels = await parcelsCollection.find(filter).toArray();
+          res.json(parcels);
+        } catch (err) {
+          console.error(err);
+          res
+            .status(500)
+            .json({ message: "Failed to fetch unassigned parcels" });
+        }
+      }
+    );
+
+    app.patch(
+      "/parcels/:id/assign",
+      verifyFirebaseToken,
+      checkRole("admin"),
+      async (req, res) => {
+        const { id } = req.params;
+        const { riderId } = req.body;
+        const result = await parcelsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { assignedTo: riderId, assignedAt: new Date() } }
+        );
+        res.json({ modifiedCount: result.modifiedCount });
+      }
+    );
+    app.get("/parcels/assigned", verifyFirebaseToken, async (req, res) => {
+      const email = req.decodedToken.email;
+      const parcels = await parcelsCollection
+        .find({ assignedTo: email })
+        .toArray();
+      res.json(parcels);
     });
     // users
     app.get("/users", async (req, res) => {
