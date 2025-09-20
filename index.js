@@ -51,7 +51,6 @@ async function run() {
         return res.status(401).send({ message: "unauthorized access" });
       }
       const token = authHeader.split(" ")[1];
-      
       if (!token) {
         return res.status(401).send({ message: "unauthorized access" });
       }
@@ -223,7 +222,12 @@ async function run() {
           // Fetch only active riders
           const activeRidersList = await riders
             .find({ status: "active" })
-            .project({ _id: 1, name: 1 })
+            .project({
+              _id: 1,
+              name: 1,
+              region: 1, // <-- include region
+              warehouse: 1, // optional: include warehouse if you want to show it
+            })
             .toArray();
 
           return res.json({ activeRidersList });
